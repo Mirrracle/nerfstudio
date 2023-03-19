@@ -71,7 +71,7 @@ pip uninstall torch torchvision functorch
 Install pytorch 1.13.1 with CUDA and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)
 
 ```bash
-pip install torch torchvision functorch --extra-index-url https://download.pytorch.org/whl/cu117
+pip install torch==1.13.1 torchvision functorch --extra-index-url https://download.pytorch.org/whl/cu117
 ```
 
 :::
@@ -135,6 +135,14 @@ or be built from the repository using
 ```bash
 docker build --tag nerfstudio -f Dockerfile .
 ```
+
+To restrict to only CUDA architectures that you have available locally, use the `CUDA_ARCHITECTURES`
+build arg and look up [the compute capability for your GPU](https://developer.nvidia.com/cuda-gpus).
+For example, here's how to build with support for GeForce 30xx series GPUs:
+```bash
+docker build --build-arg CUDA_ARCHITECTURES=86 --tag nerfstudio-86 -f Dockerfile .
+```
+
 ### Using an interactive container
 The docker container can be launched with an interactive terminal where nerfstudio commands can be entered as usual. Some parameters are required and some are strongly recommended for usage as following:
 ```bash
