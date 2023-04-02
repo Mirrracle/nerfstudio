@@ -17,6 +17,7 @@ Abstracts for the Pipeline class.
 """
 from __future__ import annotations
 
+import os.path
 import typing
 from abc import abstractmethod
 from dataclasses import dataclass, field
@@ -25,6 +26,9 @@ from typing import Any, Dict, List, Mapping, Optional, Type, Union, cast
 
 import torch
 import torch.distributed as dist
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -108,7 +112,7 @@ class Pipeline(nn.Module):
         return self.model.device
 
     def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True):
-        model_state = {key[len("_model.") :]: value for key, value in state_dict.items() if key.startswith("_model.")}
+        model_state = {key[len("_model."):]: value for key, value in state_dict.items() if key.startswith("_model.")}
         pipeline_state = {key: value for key, value in state_dict.items() if not key.startswith("_model.")}
         self._model.load_state_dict(model_state, strict=strict)
         super().load_state_dict(pipeline_state, strict=False)
@@ -175,7 +179,7 @@ class Pipeline(nn.Module):
         """
 
     def get_training_callbacks(
-        self, training_callback_attributes: TrainingCallbackAttributes
+            self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
         """Returns the training callbacks from both the Dataloader and the Model."""
 
@@ -218,12 +222,12 @@ class VanillaPipeline(Pipeline):
     """
 
     def __init__(
-        self,
-        config: VanillaPipelineConfig,
-        device: str,
-        test_mode: Literal["test", "val", "inference"] = "val",
-        world_size: int = 1,
-        local_rank: int = 0,
+            self,
+            config: VanillaPipelineConfig,
+            device: str,
+            test_mode: Literal["test", "val", "inference"] = "val",
+            world_size: int = 1,
+            local_rank: int = 0,
     ):
         super().__init__()
         self.config = config
@@ -333,11 +337,11 @@ class VanillaPipeline(Pipeline):
         metrics_dict_list = []
         num_images = len(self.datamanager.fixed_indices_eval_dataloader)
         with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TimeElapsedColumn(),
-            MofNCompleteColumn(),
-            transient=True,
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TimeElapsedColumn(),
+                MofNCompleteColumn(),
+                transient=True,
         ) as progress:
             task = progress.add_task("[green]Evaluating all eval images...", total=num_images)
             for camera_ray_bundle, batch in self.datamanager.fixed_indices_eval_dataloader:
@@ -371,13 +375,13 @@ class VanillaPipeline(Pipeline):
             step: training step of the loaded checkpoint
         """
         state = {
-            (key[len("module.") :] if key.startswith("module.") else key): value for key, value in loaded_state.items()
+            (key[len("module."):] if key.startswith("module.") else key): value for key, value in loaded_state.items()
         }
         self._model.update_to_step(step)
         self.load_state_dict(state, strict=True)
 
     def get_training_callbacks(
-        self, training_callback_attributes: TrainingCallbackAttributes
+            self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
         """Returns the training callbacks from both the Dataloader and the Model."""
         datamanager_callbacks = self.datamanager.get_training_callbacks(training_callback_attributes)
@@ -395,3 +399,68 @@ class VanillaPipeline(Pipeline):
         model_params = self.model.get_param_groups()
         # TODO(ethan): assert that key names don't overlap
         return {**datamanager_params, **model_params}
+
+    def get_average_eval_image_metrics_images(self, output_dir, step: Optional[int] = None):
+        """Iterate over all the images in the eval dataset and get the average.
+
+        Returns:
+            metrics_dict: dictionary of metrics
+        """
+        self.eval()
+        metrics_dict_list = []
+        images_dict_list = []
+        num_images = len(self.datamanager.fixed_indices_eval_dataloader)
+        with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TimeElapsedColumn(),
+                MofNCompleteColumn(),
+                transient=True,
+        ) as progress:
+            task = progress.add_task("[green]Evaluating all eval images...", total=num_images)
+            for camera_ray_bundle, batch in self.datamanager.fixed_indices_eval_dataloader:
+                # time this the following line
+                inner_start = time()
+                height, width = camera_ray_bundle.shape
+                num_rays = height * width
+                outputs = self.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+                metrics_dict, images_dict = self.model.get_image_metrics_and_images(outputs, batch)
+                assert "num_rays_per_sec" not in metrics_dict
+                metrics_dict["num_rays_per_sec"] = num_rays / (time() - inner_start)
+                fps_str = "fps"
+                assert fps_str not in metrics_dict
+                metrics_dict[fps_str] = metrics_dict["num_rays_per_sec"] / (height * width)
+
+                idx = batch['image_idx']
+
+                # save depth map
+                depth_map = images_dict['depth'].permute(2, 0, 1)  # Permute to (3, 800, 800)
+                depth_map = np.array(depth_map.cpu().detach())  # Convert to numpy array
+                depth_map = depth_map.transpose((1, 2, 0))  # Transpose to (800, 800, 3)
+                depth_min, depth_max = depth_map.min(), depth_map.max()
+                depth_map = (255 * (depth_map - depth_min) / (depth_max - depth_min)).astype(np.uint8)  # scale
+                depth_map = Image.fromarray(depth_map)
+                depth_dir = os.path.join(output_dir, 'depth_maps')
+                if not os.path.exists(depth_dir):
+                    os.makedirs(depth_dir)
+                depth_map.save(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_0001.png'))
+
+                # save rgb image
+                rgb_img = images_dict['img'].cpu().numpy()
+                rgb_dir = os.path.join(output_dir, 'rgb_images')
+                if not os.path.exists(rgb_dir):
+                    os.makedirs(rgb_dir)
+                plt.imsave(os.path.join(rgb_dir, 'r_' + str(idx) + '.png'), rgb_img)
+
+
+                metrics_dict_list.append(metrics_dict)
+                progress.advance(task)
+
+        # average the metrics list
+        metrics_dict = {}
+        for key in metrics_dict_list[0].keys():
+            metrics_dict[key] = float(
+                torch.mean(torch.tensor([metrics_dict[key] for metrics_dict in metrics_dict_list]))
+            )
+        self.train()
+        return metrics_dict, images_dict_list

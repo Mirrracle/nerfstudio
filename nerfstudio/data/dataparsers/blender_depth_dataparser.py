@@ -16,8 +16,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Type
+from pathlib import Path, PurePath
+from typing import Type, Optional
+from PIL import Image
+from rich.console import Console
 
 import imageio
 import numpy as np
@@ -33,6 +35,9 @@ from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.io import load_from_json
 
+CONSOLE = Console(width=120)
+MAX_AUTO_RESOLUTION = 1600
+
 
 @dataclass
 class BlenderDataParserConfig(DataParserConfig):
@@ -46,6 +51,10 @@ class BlenderDataParserConfig(DataParserConfig):
     """How much to scale the camera origins by."""
     alpha_color: str = "white"
     """alpha color of background"""
+    depth_unit_scale_factor: float = 1e-3
+    """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
+    downscale_factor: Optional[int] = None
+    """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
 
 @dataclass
 class Blender(DataParser):
@@ -54,6 +63,7 @@ class Blender(DataParser):
     """
 
     config: BlenderDataParserConfig
+    downscale_factor: Optional[int] = None
 
     def __init__(self, config: BlenderDataParserConfig):
         super().__init__(config=config)
@@ -69,11 +79,21 @@ class Blender(DataParser):
 
         meta = load_from_json(self.data / f"transforms_{split}.json")
         image_filenames = []
+        depth_filenames = []
         poses = []
         for frame in meta["frames"]:
             fname = self.data / Path(frame["file_path"].replace("./", "") + ".png")
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
+
+            if "depth_file_path" in frame:
+                depth_filepath = PurePath(frame["depth_file_path"])
+                depth_fname = self._get_fname(depth_filepath, self.data, downsample_folder_prefix="depths_")
+                depth_filenames.append(depth_fname)
+        assert len(depth_filenames) == 0 or (
+                len(depth_filenames) == len(image_filenames)
+        )
+
         poses = np.array(poses).astype(np.float32)
 
         img_0 = imageio.imread(image_filenames[0])
@@ -104,6 +124,41 @@ class Blender(DataParser):
             alpha_color=alpha_color_tensor,
             scene_box=scene_box,
             dataparser_scale=self.scale_factor,
+            metadata={
+                "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
+                "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
+            },
         )
 
         return dataparser_outputs
+
+    def _get_fname(self, filepath: PurePath, data_dir: PurePath, downsample_folder_prefix="images_") -> Path:
+        """Get the filename of the image file.
+        downsample_folder_prefix can be used to point to auxiliary image data, e.g. masks
+
+        filepath: the base file name of the transformations.
+        data_dir: the directory of the data that contains the transform file
+        downsample_folder_prefix: prefix of the newly generated downsampled images
+        """
+
+        if self.downscale_factor is None:
+            if self.config.downscale_factor is None:
+                test_img = Image.open(data_dir / filepath)
+                h, w = test_img.size
+                max_res = max(h, w)
+                df = 0
+                while True:
+                    if (max_res / 2 ** (df)) < MAX_AUTO_RESOLUTION:
+                        break
+                    if not (data_dir / f"{downsample_folder_prefix}{2**(df+1)}" / filepath.name).exists():
+                        break
+                    df += 1
+
+                self.downscale_factor = 2**df
+                CONSOLE.log(f"Auto image downscale factor of {self.downscale_factor}")
+            else:
+                self.downscale_factor = self.config.downscale_factor
+
+        if self.downscale_factor > 1:
+            return data_dir / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
+        return data_dir / filepath
