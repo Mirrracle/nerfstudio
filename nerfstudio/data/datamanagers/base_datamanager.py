@@ -41,6 +41,7 @@ from nerfstudio.data.dataparsers.arkitscenes_dataparser import (
 )
 from nerfstudio.data.dataparsers.base_dataparser import DataparserOutputs
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
+from nerfstudio.data.dataparsers.blender_depth_dataparser import BlenderDepthDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
 from nerfstudio.data.dataparsers.dycheck_dataparser import DycheckDataParserConfig
 from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
@@ -106,6 +107,7 @@ AnnotatedDataParserUnion = tyro.conf.OmitSubcommandPrefixes[  # Omit prefixes of
             "minimal-parser": MinimalDataParserConfig(),
             "arkit-data": ARKitScenesDataParserConfig(),
             "blender-data": BlenderDataParserConfig(),
+            "blender-depth-data": BlenderDepthDataParserConfig(),
             "instant-ngp-data": InstantNGPDataParserConfig(),
             "nuscenes-data": NuScenesDataParserConfig(),
             "dnerf-data": DNeRFDataParserConfig(),

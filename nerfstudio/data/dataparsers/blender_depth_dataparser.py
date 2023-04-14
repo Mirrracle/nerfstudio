@@ -40,10 +40,10 @@ MAX_AUTO_RESOLUTION = 1600
 
 
 @dataclass
-class BlenderDataParserConfig(DataParserConfig):
+class BlenderDepthDataParserConfig(DataParserConfig):
     """Blender dataset parser config"""
 
-    _target: Type = field(default_factory=lambda: Blender)
+    _target: Type = field(default_factory=lambda: BlenderDepth)
     """target class to instantiate"""
     data: Path = Path("data/blender/lego")
     """Directory specifying location of data."""
@@ -57,15 +57,15 @@ class BlenderDataParserConfig(DataParserConfig):
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
 
 @dataclass
-class Blender(DataParser):
+class BlenderDepth(DataParser):
     """Blender Dataset
     Some of this code comes from https://github.com/yenchenlin/nerf-pytorch/blob/master/load_blender.py#L37.
     """
 
-    config: BlenderDataParserConfig
+    config: BlenderDepthDataParserConfig
     downscale_factor: Optional[int] = None
 
-    def __init__(self, config: BlenderDataParserConfig):
+    def __init__(self, config: BlenderDepthDataParserConfig):
         super().__init__(config=config)
         self.data: Path = config.data
         self.scale_factor: float = config.scale_factor

@@ -29,8 +29,8 @@ class ComputePSNR:
         """Main function."""
         config, pipeline, checkpoint_path = eval_setup(self.load_config)
         assert self.output_path.suffix == ".json"
-        metrics_dict = pipeline.get_average_eval_image_metrics()
-        # metrics_dict, images_dict = pipeline.get_average_eval_image_metrics_images(self.output_path.parent)
+        # metrics_dict = pipeline.get_average_eval_image_metrics()
+        metrics_dict, images_dict = pipeline.get_average_eval_image_metrics_images(self.output_path.parent)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         # Get the output and define the names to save to
         benchmark_info = {
