@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Data parser for blender dataset"""
+"""Data parser for blender dataset with depth"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -41,7 +41,7 @@ MAX_AUTO_RESOLUTION = 1600
 
 @dataclass
 class BlenderDepthDataParserConfig(DataParserConfig):
-    """Blender dataset parser config"""
+    """Blender dataset parser config with depth"""
 
     _target: Type = field(default_factory=lambda: BlenderDepth)
     """target class to instantiate"""
@@ -107,6 +107,8 @@ class BlenderDepth(DataParser):
 
         # in x,y,z order
         camera_to_world[..., 3] *= self.scale_factor
+        # scene_box = SceneBox(aabb=torch.tensor([[-0.3, -0.3, -1.2], [0.3, 0.3, 1.2]], dtype=torch.float32))
+        # scene_box = SceneBox(aabb=torch.tensor([[-4.1, -4.1, -2], [4.1, 4.1, 2]], dtype=torch.float32))
         scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
 
         cameras = Cameras(

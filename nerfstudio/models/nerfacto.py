@@ -129,7 +129,6 @@ class NerfactoModelConfig(ModelConfig):
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
 
-
 class NerfactoModel(Model):
     """Nerfacto model
 
