@@ -87,8 +87,8 @@ class Blender(DataParser):
 
         # in x,y,z order
         camera_to_world[..., 3] *= self.scale_factor
-        scene_box = SceneBox(aabb=torch.tensor([[-0.25, -0.25, -1.2], [0.25, 0.25, 1.2]], dtype=torch.float32))
-        # scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
+        # scene_box = SceneBox(aabb=torch.tensor([[-0.25, -0.25, -1.2], [0.25, 0.25, 1.2]], dtype=torch.float32))
+        scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
 
         cameras = Cameras(
             camera_to_worlds=camera_to_world,
