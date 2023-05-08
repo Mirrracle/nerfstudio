@@ -417,9 +417,16 @@ class VanillaPipeline(Pipeline):
                 idx = batch['image_idx']
 
                 # save depth map (replace transform_train/val.json to transform_test.json to get res on train/val set)
+                new_max = 5.5
+                new_min = 3.0
                 ground_truth_depth = batch["depth_image"]
+                depth_mask = ground_truth_depth > 0
+                ground_truth_depth = (1 - ground_truth_depth) * new_max + ground_truth_depth * new_min
+
                 predicted_depth = outputs["depth"]
-                predicted_depth = 1 - predicted_depth
+                pred_min, pred_max = predicted_depth[depth_mask].min(), predicted_depth[depth_mask].max()
+                scaled_predicted_depth = (predicted_depth - pred_min) / (pred_max - pred_min) * (new_max - new_min) + new_min
+
                 # ground_truth_depth_colormap = colormaps.apply_depth_colormap(ground_truth_depth)
                 # predicted_depth_colormap = colormaps.apply_depth_colormap(
                 #     outputs["depth"],
@@ -430,22 +437,21 @@ class VanillaPipeline(Pipeline):
                 # images_dict["depth"] = torch.cat([ground_truth_depth, predicted_depth_colormap], dim=1)
                 # depth_map = images_dict["depth"].cpu()
 
-                depth_mask = ground_truth_depth > 0
                 metrics_dict["depth_mse"] = torch.nn.functional.mse_loss(
-                    predicted_depth[depth_mask], ground_truth_depth[depth_mask]
+                    scaled_predicted_depth[depth_mask], ground_truth_depth[depth_mask]
                 )
 
-                depth_dir = os.path.join(output_dir, 'depth_maps/train')
+                depth_dir = os.path.join(output_dir, 'depth_maps/test')
                 if not os.path.exists(depth_dir):
                     os.makedirs(depth_dir)
                 plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
                            ground_truth_depth.squeeze().cpu(), cmap='gray')
                 plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_out.png'),
-                           predicted_depth.squeeze().cpu(), cmap='gray')
+                           scaled_predicted_depth.squeeze().cpu(), cmap='gray')
 
                 # save rgb images
                 rgb_img = images_dict['img'].cpu().numpy()
-                rgb_dir = os.path.join(output_dir, 'rgb_images/train')
+                rgb_dir = os.path.join(output_dir, 'rgb_images/test')
                 if not os.path.exists(rgb_dir):
                     os.makedirs(rgb_dir)
                 plt.imsave(os.path.join(rgb_dir, 'r_' + str(idx) + '.png'), rgb_img)
