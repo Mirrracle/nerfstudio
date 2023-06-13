@@ -107,7 +107,8 @@ class BlenderDepth(DataParser):
 
         # in x,y,z order
         camera_to_world[..., 3] *= self.scale_factor
-        scene_box = SceneBox(aabb=torch.tensor([[-0.3, -0.3, -1.0], [0.3, 0.3, 1.0]], dtype=torch.float32))
+        # scene_box = SceneBox(aabb=torch.tensor([[-0.3, -0.3, -1.0], [0.3, 0.3, 1.0]], dtype=torch.float32))
+        scene_box = SceneBox(aabb=torch.tensor([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]], dtype=torch.float32))
         # scene_box = SceneBox(aabb=torch.tensor([[-4.1, -4.1, -2], [4.1, 4.1, 2]], dtype=torch.float32))
         # scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
 

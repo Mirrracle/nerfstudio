@@ -401,6 +401,8 @@ class VanillaPipeline(Pipeline):
                 transient=True,
         ) as progress:
             task = progress.add_task("[green]Evaluating all eval images...", total=num_images)
+            # gt, pred = torch.Tensor(), torch.Tensor()  # initialize 2 tensors to hold depth maps
+            depth_trans = torch.load('depth_transformation.pt').to("cuda:0")
             for camera_ray_bundle, batch in self.datamanager.fixed_indices_eval_dataloader:
                 # time this the following line
                 inner_start = time()
@@ -417,37 +419,71 @@ class VanillaPipeline(Pipeline):
                 idx = batch['image_idx']
 
                 # save depth map (replace transform_train/val.json to transform_test.json to get res on train/val set)
+
+                # # 1. use colormaps.apply_depth_colormap
+                # new_max = 5.5
+                # new_min = 3.0
+                # ground_truth_depth = batch["depth_image"]
+                # ground_truth_depth = (1 - ground_truth_depth) * new_max + ground_truth_depth * new_min
+                #
+                # # ground_truth_depth = 1-ground_truth_depth
+                # ground_truth_depth_color = colormaps.apply_depth_colormap(ground_truth_depth, cmap="turbo")
+                # depth_mask = ground_truth_depth_color > 0
+                # # ground_truth_depth_color[~depth_mask] = torch.tensor([1.0, 1.0, 1.0]).cuda()
+                #
+                # # ground_truth_depth_color[~depth_mask] = 1
+                # predicted_depth_color = images_dict["depth"]
+                #
+                # metrics_dict["depth_mse"] = torch.nn.functional.mse_loss(
+                #     predicted_depth_color[depth_mask], ground_truth_depth_color[depth_mask]
+                # )
+                #
+                # depth_dir = os.path.join(output_dir, 'depth_maps/test')
+                # if not os.path.exists(depth_dir):
+                #     os.makedirs(depth_dir)
+                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
+                #            ground_truth_depth_color.cpu().numpy(), cmap='gray')
+                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_out.png'),
+                #            predicted_depth_color.cpu().numpy(), cmap='gray')
+
+                # 2. convert back to world coordinate system, grayscale
                 new_max = 5.5
                 new_min = 3.0
+
+                # convert gt depth map back to world coordinate
                 ground_truth_depth = batch["depth_image"]
-                depth_mask = ground_truth_depth > 0
-                ground_truth_depth = (1 - ground_truth_depth) * new_max + ground_truth_depth * new_min
+                depth_mask = ground_truth_depth > 0  # DON'T PUT IT AFTER THE NEXT LINE...
+                # ground_truth_depth = ground_truth_depth * (new_min - new_max) + new_max
+                ground_truth_depth = (ground_truth_depth-0.0) * (new_min-new_max) / (1.0-0.0) + new_max
+                ground_truth_depth[~depth_mask] = 5.5
 
-                predicted_depth = outputs["depth"]
-                pred_min, pred_max = predicted_depth[depth_mask].min(), predicted_depth[depth_mask].max()
-                scaled_predicted_depth = (predicted_depth - pred_min) / (pred_max - pred_min) * (new_max - new_min) + new_min
+                # scale predicted depth map to the same scale first
+                predicted_depth = outputs["depth"].to(torch.float64)
+                # pred_min, pred_max = torch.min(predicted_depth[depth_mask]), torch.max(predicted_depth[depth_mask])
+                # predicted_depth = (predicted_depth-pred_min) * (new_max-new_min) / (pred_max-pred_min) + new_min
+                # predicted_depth[~depth_mask] = 5.5
 
-                # ground_truth_depth_colormap = colormaps.apply_depth_colormap(ground_truth_depth)
-                # predicted_depth_colormap = colormaps.apply_depth_colormap(
-                #     outputs["depth"],
-                #     accumulation=outputs["accumulation"],
-                #     near_plane=torch.min(ground_truth_depth),
-                #     far_plane=torch.max(ground_truth_depth),
-                # )
-                # images_dict["depth"] = torch.cat([ground_truth_depth, predicted_depth_colormap], dim=1)
-                # depth_map = images_dict["depth"].cpu()
+                # # perform (a*d + b) to predicted depth map to make sure gt and pred are in the same scale
+                # gt = torch.cat((gt, ground_truth_depth[depth_mask].cpu()), dim=0)
+                # pred = torch.cat((pred, predicted_depth[depth_mask].cpu()), dim=0)
+                # print(gt.shape, pred.shape)
+                ones = torch.ones(len(predicted_depth[depth_mask]), 1).to('cuda:0')
+                p = predicted_depth[depth_mask].unsqueeze(0).T
+                predicted_depth[depth_mask] = (torch.cat((p, ones), dim=1) @ depth_trans.to(torch.float64)).squeeze(1)
+                predicted_depth[~depth_mask] = 5.5
+                predicted_depth = torch.clamp(predicted_depth, 3.0, 5.5)  # truncate
+
 
                 metrics_dict["depth_mse"] = torch.nn.functional.mse_loss(
-                    scaled_predicted_depth[depth_mask], ground_truth_depth[depth_mask]
-                )
+                    ground_truth_depth[depth_mask], predicted_depth[depth_mask])
 
                 depth_dir = os.path.join(output_dir, 'depth_maps/test')
                 if not os.path.exists(depth_dir):
                     os.makedirs(depth_dir)
                 plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
-                           ground_truth_depth.squeeze().cpu(), cmap='gray')
-                plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_out.png'),
-                           scaled_predicted_depth.squeeze().cpu(), cmap='gray')
+                           (1-ground_truth_depth).cpu().squeeze().numpy(), cmap='gray')
+                plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_pred.png'),
+                           (1-predicted_depth).cpu().squeeze().numpy(), cmap='gray')
 
                 # save rgb images
                 rgb_img = images_dict['img'].cpu().numpy()
@@ -458,6 +494,9 @@ class VanillaPipeline(Pipeline):
 
                 metrics_dict_list.append(metrics_dict)
                 progress.advance(task)
+
+            # torch.save(gt, 'gt.pt')
+            # torch.save(pred, 'pred.pt')
 
         # average the metrics list
         metrics_dict = {}
