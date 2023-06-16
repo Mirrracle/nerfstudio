@@ -16,14 +16,14 @@ from nerfstudio.data.utils.colmap_parsing_utils import (
     write_cameras_binary,
     write_images_binary,
 )
-from nerfstudio.process_data.images_to_nerstudio_dataset import (
+from nerfstudio.process_data.images_to_nerfstudio_dataset import (
     ImagesToNerfstudioDataset,
 )
 
 
 def random_quaternion(num_poses: int):
     """
-    Generates random rotation quatenion.
+    Generates random rotation quaternion.
     """
     u, v, w = np.random.uniform(size=(3, num_poses))
     quaternion = np.stack(
