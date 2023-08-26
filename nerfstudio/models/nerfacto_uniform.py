@@ -32,7 +32,6 @@ from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
-from nerfstudio.field_components.ray_refraction import visualization
 from nerfstudio.fields.density_fields import HashMLPDensityField
 from nerfstudio.fields.nerfacto_field import NerfactoField
 from nerfstudio.model_components.losses import (
@@ -43,14 +42,12 @@ from nerfstudio.model_components.losses import (
     pred_normal_loss,
     scale_gradients_by_distance_squared,
 )
-from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler, UniformSampler
+from nerfstudio.model_components.ray_samplers import UniformSampler
 from nerfstudio.model_components.renderers import AccumulationRenderer, DepthRenderer, NormalsRenderer, RGBRenderer
 from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
-from nerfstudio.utils import colormaps
-
-import matplotlib.pyplot as plt
+from nerfstudio.utils import colormaps, misc
 
 
 @dataclass
@@ -131,36 +128,6 @@ class NerfactoModelConfig(ModelConfig):
     """Dimension of the appearance embedding."""
 
 
-def plot_weights(weights, z, idx_start, idx_end):
-    """
-    Plot the weights vs. z for a specific ray.
-
-    Args:
-    - weights (Tensor or array): The computed weights for samples along the ray.
-    - z_values (Tensor or array): The z-values (distances) along the ray.
-    - ray_idx (int): Index of the ray you want to visualize.
-    """
-
-    # Convert tensors to numpy arrays if necessary
-    if hasattr(weights, "cpu"):
-        weights = weights.cpu().numpy()
-    if hasattr(z, "cpu"):
-        z = z.cpu().numpy()
-
-    for i in range(idx_start, idx_end):
-        valid_indices = np.where((z[i] >= 0) & (z[i] <= 1.0))[0]
-        plt.figure(figsize=(10, 5))
-        # plt.plot(z[i], weights[i], '-o')
-        plt.plot(z[i][valid_indices], weights[i][valid_indices], '-o')
-        plt.title(f"Weights vs. Z for Ray {i}")
-        plt.xlabel("Z values (Distance along the ray)")
-        plt.ylabel("Weights")
-        plt.xlim(0, 1)
-        plt.grid(True)
-        plt.savefig(f'data/figures1/weights_vs_z_ray_{i}.png', bbox_inches='tight')
-        # plt.show()
-
-
 class NerfactoModel(Model):
     """Nerfacto model
 
@@ -197,53 +164,9 @@ class NerfactoModel(Model):
         )
 
         self.density_fns = []
-        num_prop_nets = self.config.num_proposal_iterations
-        # Build the proposal network(s)
-        self.proposal_networks = torch.nn.ModuleList()
-        if self.config.use_same_proposal_network:
-            assert len(self.config.proposal_net_args_list) == 1, "Only one proposal network is allowed."
-            prop_net_args = self.config.proposal_net_args_list[0]
-            network = HashMLPDensityField(
-                self.scene_box.aabb,
-                spatial_distortion=scene_contraction,
-                **prop_net_args,
-                implementation=self.config.implementation,
-            )
-            self.proposal_networks.append(network)
-            self.density_fns.extend([network.density_fn for _ in range(num_prop_nets)])
-        else:
-            for i in range(num_prop_nets):
-                prop_net_args = self.config.proposal_net_args_list[min(i, len(self.config.proposal_net_args_list) - 1)]
-                network = HashMLPDensityField(
-                    self.scene_box.aabb,
-                    spatial_distortion=scene_contraction,
-                    **prop_net_args,
-                    implementation=self.config.implementation,
-                )
-                self.proposal_networks.append(network)
-            self.density_fns.extend([network.density_fn for network in self.proposal_networks])
 
         # Samplers
-        def update_schedule(step):
-            return np.clip(
-                np.interp(step, [0, self.config.proposal_warmup], [0, self.config.proposal_update_every]),
-                1,
-                self.config.proposal_update_every,
-            )
-
-        # Change proposal network initial sampler if uniform
-        initial_sampler = None  # None is for piecewise as default (see ProposalNetworkSampler)
-        if self.config.proposal_initial_sampler == "uniform":
-            initial_sampler = UniformSampler(single_jitter=self.config.use_single_jitter)
-
-        self.proposal_sampler = ProposalNetworkSampler(
-            num_nerf_samples_per_ray=self.config.num_nerf_samples_per_ray,
-            num_proposal_samples_per_ray=self.config.num_proposal_samples_per_ray,
-            num_proposal_network_iterations=self.config.num_proposal_iterations,
-            single_jitter=self.config.use_single_jitter,
-            update_sched=update_schedule,
-            initial_sampler=initial_sampler,
-        )
+        self.uniform_sampler = UniformSampler(num_samples=self.config.num_nerf_samples_per_ray)
 
         # Collider
         self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
@@ -267,59 +190,19 @@ class NerfactoModel(Model):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
-        param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
+        if self.field is None:
+            raise ValueError("populate_fields() must be called before get_param_groups")
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
-    def get_training_callbacks(
-            self, training_callback_attributes: TrainingCallbackAttributes
-    ) -> List[TrainingCallback]:
-        callbacks = []
-        if self.config.use_proposal_weight_anneal:
-            # anneal the weights of the proposal network before doing PDF sampling
-            N = self.config.proposal_weights_anneal_max_num_iters
-
-            def set_anneal(step):
-                # https://arxiv.org/pdf/2111.12077.pdf eq. 18
-                train_frac = np.clip(step / N, 0, 1)
-
-                def bias(x, b):
-                    return b * x / ((b - 1) * x + 1)
-
-                anneal = bias(train_frac, self.config.proposal_weights_anneal_slope)
-                self.proposal_sampler.set_anneal(anneal)
-
-            callbacks.append(
-                TrainingCallback(
-                    where_to_run=[TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
-                    update_every_num_iters=1,
-                    func=set_anneal,
-                )
-            )
-            callbacks.append(
-                TrainingCallback(
-                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                    update_every_num_iters=1,
-                    func=self.proposal_sampler.step_cb,
-                )
-            )
-        return callbacks
-
     def get_outputs(self, ray_bundle: RayBundle):
         ray_samples: RaySamples
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples = self.uniform_sampler(ray_bundle)
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.predict_normals)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
-        # visualization(ray_samples, 56, 57)
 
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
-        # plot_weights(weights, (ray_samples.spacing_starts + ray_samples.spacing_ends)/2, 0, 100)
-        # plot_weights(weights, (ray_samples.frustums.starts + ray_samples.frustums.ends)/2, 0, 100)
-        # import sys
-        # sys.exit(0)
-        weights_list.append(weights)
-        ray_samples_list.append(ray_samples)
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
@@ -336,24 +219,6 @@ class NerfactoModel(Model):
             pred_normals = self.renderer_normals(field_outputs[FieldHeadNames.PRED_NORMALS], weights=weights)
             outputs["normals"] = self.normals_shader(normals)
             outputs["pred_normals"] = self.normals_shader(pred_normals)
-        # These use a lot of GPU memory, so we avoid storing them for eval.
-        if self.training:
-            outputs["weights_list"] = weights_list
-            outputs["ray_samples_list"] = ray_samples_list
-
-        if self.training and self.config.predict_normals:
-            outputs["rendered_orientation_loss"] = orientation_loss(
-                weights.detach(), field_outputs[FieldHeadNames.NORMALS], ray_bundle.directions
-            )
-
-            outputs["rendered_pred_normal_loss"] = pred_normal_loss(
-                weights.detach(),
-                field_outputs[FieldHeadNames.NORMALS].detach(),
-                field_outputs[FieldHeadNames.PRED_NORMALS],
-            )
-
-        for i in range(self.config.num_proposal_iterations):
-            outputs[f"prop_depth_{i}"] = self.renderer_depth(weights=weights_list[i], ray_samples=ray_samples_list[i])
 
         return outputs
 
@@ -361,30 +226,13 @@ class NerfactoModel(Model):
         metrics_dict = {}
         image = batch["image"].to(self.device)
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
-        if self.training:
-            metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         loss_dict = {}
         image = batch["image"].to(self.device)
         loss_dict["rgb_loss"] = self.rgb_loss(image, outputs["rgb"])
-        if self.training:
-            loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
-                outputs["weights_list"], outputs["ray_samples_list"]
-            )
-            assert metrics_dict is not None and "distortion" in metrics_dict
-            loss_dict["distortion_loss"] = self.config.distortion_loss_mult * metrics_dict["distortion"]
-            if self.config.predict_normals:
-                # orientation loss for computed normals
-                loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(
-                    outputs["rendered_orientation_loss"]
-                )
-
-                # ground truth supervision for normals
-                loss_dict["pred_normal_loss"] = self.config.pred_normal_loss_mult * torch.mean(
-                    outputs["rendered_pred_normal_loss"]
-                )
+        loss_dict = misc.scale_dict(loss_dict, self.config.loss_coefficients)
         return loss_dict
 
     def get_image_metrics_and_images(
@@ -415,13 +263,5 @@ class NerfactoModel(Model):
         metrics_dict["lpips"] = float(lpips)
 
         images_dict = {"img": combined_rgb, "accumulation": combined_acc, "depth": combined_depth}
-
-        for i in range(self.config.num_proposal_iterations):
-            key = f"prop_depth_{i}"
-            prop_depth_i = colormaps.apply_depth_colormap(
-                outputs[key],
-                accumulation=outputs["accumulation"],
-            )
-            images_dict[key] = prop_depth_i
 
         return metrics_dict, images_dict

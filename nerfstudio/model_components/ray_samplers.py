@@ -95,36 +95,37 @@ class SpacedSampler(Sampler):
 
         num_samples = num_samples or self.num_samples
         assert num_samples is not None
-        num_rays = ray_bundle.origins.shape[0]
+        num_rays = ray_bundle.origins.shape[0]  # number of rays in a bundle
 
         bins = torch.linspace(0.0, 1.0, num_samples + 1).to(ray_bundle.origins.device)[None, ...]  # [1, num_samples+1]
 
         # TODO More complicated than it needs to be.
         if self.train_stratified and self.training:
-            if self.single_jitter:
+            if self.single_jitter:  # each ray has a single jitter value
                 t_rand = torch.rand((num_rays, 1), dtype=bins.dtype, device=bins.device)
-            else:
+            else:  # each ray has a jitter value for each sample
                 t_rand = torch.rand((num_rays, num_samples + 1), dtype=bins.dtype, device=bins.device)
-            bin_centers = (bins[..., 1:] + bins[..., :-1]) / 2.0
+            bin_centers = (bins[..., 1:] + bins[..., :-1]) / 2.0  # take the average between consecutive boundary points
             bin_upper = torch.cat([bin_centers, bins[..., -1:]], -1)
             bin_lower = torch.cat([bins[..., :1], bin_centers], -1)
-            bins = bin_lower + (bin_upper - bin_lower) * t_rand
+            bins = bin_lower + (bin_upper - bin_lower) * t_rand  # add a random jitter
 
-        s_near, s_far = (self.spacing_fn(x) for x in (ray_bundle.nears, ray_bundle.fars))
+        s_near, s_far = (self.spacing_fn(x) for x in (ray_bundle.nears, ray_bundle.fars))  # near, far plane that we set
 
-        def spacing_to_euclidean_fn(x):
-            return self.spacing_fn_inv(x * s_far + (1 - x) * s_near)
+        def spacing_to_euclidean_fn(x):  # x is the relative position of a sample point along a ray, ranging from 0 to 1
+            return self.spacing_fn_inv(x * s_far + (1 - x) * s_near)  # weighted average, x is the weight, (interpolate)
 
-        euclidean_bins = spacing_to_euclidean_fn(bins)  # [num_rays, num_samples+1]
+        # maps the interpolated tensor from the parameterized spacing domain to the Euclidean coordinate domain.
+        euclidean_bins = spacing_to_euclidean_fn(bins)  # [num_rays, num_samples+1], (0, 1) -> (near, far)
 
         ray_samples = ray_bundle.get_ray_samples(
-            bin_starts=euclidean_bins[..., :-1, None],
-            bin_ends=euclidean_bins[..., 1:, None],
-            spacing_starts=bins[..., :-1, None],
-            spacing_ends=bins[..., 1:, None],
+            bin_starts=euclidean_bins[..., :-1, None],  # select the starting positions of the bins for each ray
+            bin_ends=euclidean_bins[..., 1:, None],  # selects the ending positions of the bins for each ray
+            spacing_starts=bins[..., :-1, None],  # normalized starting positions
+            spacing_ends=bins[..., 1:, None],  # normalized ending positions
             spacing_to_euclidean_fn=spacing_to_euclidean_fn,
         )
-
+        # ray_samples.get_refracted_rays()
         return ray_samples
 
 
@@ -293,11 +294,9 @@ class PDFSampler(Sampler):
         Returns:
             Positions and deltas for samples along a ray
         """
-
         if ray_samples is None or ray_bundle is None:
             raise ValueError("ray_samples and ray_bundle must be provided")
         assert weights is not None, "weights must be provided"
-
         num_samples = num_samples or self.num_samples
         assert num_samples is not None
         num_bins = num_samples + 1
@@ -368,7 +367,6 @@ class PDFSampler(Sampler):
             spacing_ends=bins[..., 1:, None],
             spacing_to_euclidean_fn=ray_samples.spacing_to_euclidean_fn,
         )
-
         return ray_samples
 
 
@@ -591,12 +589,14 @@ class ProposalNetworkSampler(Sampler):
             if i_level == 0:
                 # Uniform sampling because we need to start with some samples
                 ray_samples = self.initial_sampler(ray_bundle, num_samples=num_samples)
+                ray_samples.get_refracted_rays()
             else:
                 # PDF sampling based on the last samples and their weights
                 # Perform annealing to the weights. This will be a no-op if self._anneal is 1.0.
                 assert weights is not None
                 annealed_weights = torch.pow(weights, self._anneal)
                 ray_samples = self.pdf_sampler(ray_bundle, ray_samples, annealed_weights, num_samples=num_samples)
+                ray_samples.get_refracted_rays()
             if is_prop:
                 if updated:
                     # always update on the first step or the inf check in grad scaling crashes

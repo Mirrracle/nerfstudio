@@ -49,7 +49,8 @@ class BlenderDepthDataParserConfig(DataParserConfig):
     """Directory specifying location of data."""
     scale_factor: float = 1.0
     """How much to scale the camera origins by."""
-    alpha_color: str = "white"
+    # alpha_color: str = "white"
+    alpha_color: Optional[str] = None
     """alpha color of background"""
     depth_unit_scale_factor: float = 1e-3
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
@@ -107,8 +108,9 @@ class BlenderDepth(DataParser):
 
         # in x,y,z order
         camera_to_world[..., 3] *= self.scale_factor
+        aabb = 1.0
         # scene_box = SceneBox(aabb=torch.tensor([[-0.3, -0.3, -1.0], [0.3, 0.3, 1.0]], dtype=torch.float32))
-        scene_box = SceneBox(aabb=torch.tensor([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]], dtype=torch.float32))
+        scene_box = SceneBox(aabb=torch.tensor([[-aabb, -aabb, -aabb], [aabb, aabb, aabb]], dtype=torch.float32))
         # scene_box = SceneBox(aabb=torch.tensor([[-4.1, -4.1, -2], [4.1, 4.1, 2]], dtype=torch.float32))
         # scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
 

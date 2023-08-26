@@ -23,6 +23,7 @@ import torch
 from jaxtyping import Float, Int, Shaped
 from torch import Tensor
 
+from nerfstudio.field_components.ray_refraction import WaterBallRefraction
 from nerfstudio.utils.math import Gaussians, conical_frustum_to_gaussian
 from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
@@ -125,6 +126,53 @@ class RaySamples(TensorDataclass):
     times: Optional[Float[Tensor, "*batch 1"]] = None
     """Times at which rays are sampled"""
 
+    # def __post_init__(self) -> None:
+    #     super().__post_init__()
+    #     self.get_refracted_rays()
+
+    def get_refracted_rays(self) -> None:
+        # Modify the origins and directions of frustums here
+        positions = self.frustums.get_positions()  # [4096, 48, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
+
+        # Modify positions based on known geometry and Snell's law
+        # 1. Get origins, directions, r1, r2 directly
+        origins = self.frustums.origins  # [4096, 48, 3]
+        directions = self.frustums.directions  # [4096, 48, 3]
+        r1, r2 = 1.0 / 1.33, 1.33 / 1.0
+        radius = 0.9 * 0.1
+
+        # 2. Get normals from the geometry, calculate new directions, and update positions after the first refraction
+        ray_refraction_1 = WaterBallRefraction(origins, directions, positions, r1, radius)
+        intersections_1, normals_1 = ray_refraction_1.get_intersections_and_normals('in')  # [4096, 48, 3]
+        directions_1 = ray_refraction_1.snell_fn(normals_1)
+        positions, mask_1 = ray_refraction_1.get_updated_sample_points(intersections_1, directions_1, 'in',
+                                                                       torch.ones([positions.shape[0],
+                                                                                   positions.shape[1]],
+                                                                                  dtype=torch.bool,
+                                                                                  device=positions.device))
+
+        # 3. Get normals from the geometry, calculate new directions, and update positions after the second refraction
+        ray_refraction_2 = WaterBallRefraction(intersections_1, directions_1, positions, r2, radius)
+        intersections_2, normals_2 = ray_refraction_2.get_intersections_and_normals('out')
+        directions_2 = ray_refraction_2.snell_fn(-normals_2)
+        positions, mask_2 = ray_refraction_2.get_updated_sample_points(intersections_2, directions_2, 'out', mask_1)
+
+        # 4. Update ray_samples.frustums.directions
+        directions_new = directions.clone()
+        directions_new[mask_1] = directions_1[mask_1]
+        directions_new[mask_2] = directions_2[mask_2]
+        self.frustums.directions = directions_new
+
+        # 5. Update ray_samples.frustums.origins
+        origins_new = origins.clone()
+        origins_1 = intersections_1 - directions_1 * torch.norm(origins - intersections_1, dim=-1).unsqueeze(2)
+        origins_2 = intersections_2 - directions_2 * (
+                torch.norm(origins - intersections_1, dim=-1) + torch.norm(intersections_1 - intersections_2,
+                                                                           dim=-1)).unsqueeze(2)
+        origins_new[mask_1] = origins_1[mask_1]
+        origins_new[mask_2] = origins_2[mask_2]
+        self.frustums.origins = origins_new
+
     def get_weights(self, densities: Float[Tensor, "*batch num_samples 1"]) -> Float[Tensor, "*batch num_samples 1"]:
         """Return weights based on predicted densities
 
@@ -152,20 +200,20 @@ class RaySamples(TensorDataclass):
     @overload
     @staticmethod
     def get_weights_and_transmittance_from_alphas(
-        alphas: Float[Tensor, "*batch num_samples 1"], weights_only: Literal[True]
+            alphas: Float[Tensor, "*batch num_samples 1"], weights_only: Literal[True]
     ) -> Float[Tensor, "*batch num_samples 1"]:
         ...
 
     @overload
     @staticmethod
     def get_weights_and_transmittance_from_alphas(
-        alphas: Float[Tensor, "*batch num_samples 1"], weights_only: Literal[False] = False
+            alphas: Float[Tensor, "*batch num_samples 1"], weights_only: Literal[False] = False
     ) -> Tuple[Float[Tensor, "*batch num_samples 1"], Float[Tensor, "*batch num_samples 1"]]:
         ...
 
     @staticmethod
     def get_weights_and_transmittance_from_alphas(
-        alphas: Float[Tensor, "*batch num_samples 1"], weights_only: bool = False
+            alphas: Float[Tensor, "*batch num_samples 1"], weights_only: bool = False
     ) -> Union[
         Float[Tensor, "*batch num_samples 1"],
         Tuple[Float[Tensor, "*batch num_samples 1"], Float[Tensor, "*batch num_samples 1"]],
@@ -249,12 +297,12 @@ class RayBundle(TensorDataclass):
         return self.flatten()[start_idx:end_idx]
 
     def get_ray_samples(
-        self,
-        bin_starts: Float[Tensor, "*bs num_samples 1"],
-        bin_ends: Float[Tensor, "*bs num_samples 1"],
-        spacing_starts: Optional[Float[Tensor, "*bs num_samples 1"]] = None,
-        spacing_ends: Optional[Float[Tensor, "*bs num_samples 1"]] = None,
-        spacing_to_euclidean_fn: Optional[Callable] = None,
+            self,
+            bin_starts: Float[Tensor, "*bs num_samples 1"],
+            bin_ends: Float[Tensor, "*bs num_samples 1"],
+            spacing_starts: Optional[Float[Tensor, "*bs num_samples 1"]] = None,
+            spacing_ends: Optional[Float[Tensor, "*bs num_samples 1"]] = None,
+            spacing_to_euclidean_fn: Optional[Callable] = None,
     ) -> RaySamples:
         """Produces samples for each ray by projection points along the ray direction. Currently samples uniformly.
 
@@ -276,20 +324,22 @@ class RayBundle(TensorDataclass):
         frustums = Frustums(
             origins=shaped_raybundle_fields.origins,  # [..., 1, 3]
             directions=shaped_raybundle_fields.directions,  # [..., 1, 3]
-            starts=bin_starts,  # [..., num_samples, 1]
-            ends=bin_ends,  # [..., num_samples, 1]
+            starts=bin_starts,  # [..., num_samples, 1], euclidean
+            ends=bin_ends,  # [..., num_samples, 1], euclidean
             pixel_area=shaped_raybundle_fields.pixel_area,  # [..., 1, 1]
         )
 
         ray_samples = RaySamples(
-            frustums=frustums,
+            frustums=frustums,  # the viewing volume of the camera
             camera_indices=camera_indices,  # [..., 1, 1]
-            deltas=deltas,  # [..., num_samples, 1]
-            spacing_starts=spacing_starts,  # [..., num_samples, 1]
-            spacing_ends=spacing_ends,  # [..., num_samples, 1]
-            spacing_to_euclidean_fn=spacing_to_euclidean_fn,
+            deltas=deltas,  # [..., num_samples, 1], step size between adjacent sample points along the rays
+            spacing_starts=spacing_starts,  # [..., num_samples, 1], normalized starting positions
+            spacing_ends=spacing_ends,  # [..., num_samples, 1], normalized ending positions
+            spacing_to_euclidean_fn=spacing_to_euclidean_fn,  # mapping to euclidean space
             metadata=shaped_raybundle_fields.metadata,
             times=None if self.times is None else self.times[..., None],  # [..., 1, 1]
         )
+
+        # ray_samples.get_refracted_rays()
 
         return ray_samples

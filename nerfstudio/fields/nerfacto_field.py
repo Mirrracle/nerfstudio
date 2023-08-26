@@ -16,7 +16,6 @@
 Field for compound nerf model, adds scene contraction and image embeddings to instant ngp
 """
 
-
 from typing import Dict, Literal, Optional, Tuple
 
 import torch
@@ -37,6 +36,7 @@ from nerfstudio.field_components.field_heads import (
 )
 from nerfstudio.field_components.mlp import MLP
 from nerfstudio.field_components.spatial_distortions import SpatialDistortion
+from nerfstudio.field_components.ray_refraction import visualization
 from nerfstudio.fields.base_field import Field, shift_directions_for_tcnn
 
 
@@ -69,31 +69,31 @@ class NerfactoField(Field):
     aabb: Tensor
 
     def __init__(
-        self,
-        aabb: Tensor,
-        num_images: int,
-        num_layers: int = 2,
-        hidden_dim: int = 64,
-        geo_feat_dim: int = 15,
-        num_levels: int = 16,
-        base_res: int = 16,
-        max_res: int = 2048,
-        log2_hashmap_size: int = 19,
-        num_layers_color: int = 3,
-        num_layers_transient: int = 2,
-        features_per_level: int = 2,
-        hidden_dim_color: int = 64,
-        hidden_dim_transient: int = 64,
-        appearance_embedding_dim: int = 32,
-        transient_embedding_dim: int = 16,
-        use_transient_embedding: bool = False,
-        use_semantics: bool = False,
-        num_semantic_classes: int = 100,
-        pass_semantic_gradients: bool = False,
-        use_pred_normals: bool = False,
-        use_average_appearance_embedding: bool = False,
-        spatial_distortion: Optional[SpatialDistortion] = None,
-        implementation: Literal["tcnn", "torch"] = "tcnn",
+            self,
+            aabb: Tensor,
+            num_images: int,
+            num_layers: int = 2,
+            hidden_dim: int = 64,
+            geo_feat_dim: int = 15,
+            num_levels: int = 16,
+            base_res: int = 16,
+            max_res: int = 2048,
+            log2_hashmap_size: int = 19,
+            num_layers_color: int = 3,
+            num_layers_transient: int = 2,
+            features_per_level: int = 2,
+            hidden_dim_color: int = 64,
+            hidden_dim_transient: int = 64,
+            appearance_embedding_dim: int = 32,
+            transient_embedding_dim: int = 16,
+            use_transient_embedding: bool = False,
+            use_semantics: bool = False,
+            num_semantic_classes: int = 100,
+            pass_semantic_gradients: bool = False,
+            use_pred_normals: bool = False,
+            use_average_appearance_embedding: bool = False,
+            spatial_distortion: Optional[SpatialDistortion] = None,
+            implementation: Literal["tcnn", "torch"] = "tcnn",
     ) -> None:
         super().__init__()
 
@@ -200,12 +200,13 @@ class NerfactoField(Field):
 
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Tensor]:
         """Computes and returns the densities."""
+        positions = ray_samples.frustums.get_positions()  # [4096, 48, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
+        # visualization(ray_samples, 56, 57)
         if self.spatial_distortion is not None:
-            positions = ray_samples.frustums.get_positions()
             positions = self.spatial_distortion(positions)
             positions = (positions + 2.0) / 4.0
         else:
-            positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+            positions = SceneBox.get_normalized_positions(positions, self.aabb)
         # Make sure the tcnn gets inputs between 0 and 1.
         selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
         positions = positions * selector[..., None]
@@ -225,7 +226,7 @@ class NerfactoField(Field):
         return density, base_mlp_out
 
     def get_outputs(
-        self, ray_samples: RaySamples, density_embedding: Optional[Tensor] = None
+            self, ray_samples: RaySamples, density_embedding: Optional[Tensor] = None
     ) -> Dict[FieldHeadNames, Tensor]:
         assert density_embedding is not None
         outputs = {}

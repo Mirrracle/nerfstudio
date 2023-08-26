@@ -8,7 +8,7 @@ DEBUG = False
 
 VIEWS = 200
 RESOLUTION = 800
-DATASET_NAME = 'waterball_cube_patterned'
+DATASET_NAME = 'waterball_cube_pattern'
 RESULTS_PATH = 'val'
 DEPTH_SCALE = 1.4
 COLOR_DEPTH = 8
@@ -67,8 +67,8 @@ if 'Custom Outputs' not in tree.nodes:
         # Size is chosen kind of arbitrarily, try out until you're satisfied with resulting depth map.
         # map.inputs['From Min'].default_value = 3.0
         # map.inputs['From Max'].default_value = 5.0
-        map.inputs['From Min'].default_value = 3.1
-        map.inputs['From Max'].default_value = 13
+        map.inputs['From Min'].default_value = 3.0
+        map.inputs['From Max'].default_value = 13.15
         # map.inputs['From Min'].default_value = 3
         # map.inputs['From Max'].default_value = 5.5
         map.inputs['To Min'].default_value = 1
