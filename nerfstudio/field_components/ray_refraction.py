@@ -27,8 +27,8 @@ def visualization(ray_samples, idx_start, idx_end) -> None:
         fig.update_layout(scene=dict(aspectmode='data', aspectratio=dict(x=1, y=1, z=1)))
         fig.show()
 
-    # import sys
-    # sys.exit(0)
+    import sys
+    sys.exit(0)
 
 
 class RayRefraction:
