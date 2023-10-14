@@ -589,14 +589,20 @@ class ProposalNetworkSampler(Sampler):
             if i_level == 0:
                 # Uniform sampling because we need to start with some samples
                 ray_samples = self.initial_sampler(ray_bundle, num_samples=num_samples)
-                ray_samples.get_refracted_rays()
+                # TODO:
+
+                # directions_new, origins_new = ray_samples.get_refracted_rays()
+                # ray_samples.update_origins_directions(directions_new, origins_new)
+                # ray_samples.get_straight_rays()
             else:
                 # PDF sampling based on the last samples and their weights
                 # Perform annealing to the weights. This will be a no-op if self._anneal is 1.0.
                 assert weights is not None
                 annealed_weights = torch.pow(weights, self._anneal)
                 ray_samples = self.pdf_sampler(ray_bundle, ray_samples, annealed_weights, num_samples=num_samples)
-                ray_samples.get_refracted_rays()
+                # directions_new, origins_new = ray_samples.get_refracted_rays()
+                # ray_samples.update_origins_directions(directions_new, origins_new)
+                # ray_samples.get_straight_rays()
             if is_prop:
                 if updated:
                     # always update on the first step or the inf check in grad scaling crashes

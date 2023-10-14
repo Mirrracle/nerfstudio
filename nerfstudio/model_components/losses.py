@@ -138,6 +138,7 @@ def lossfun_distortion(t, w):
     loss_intra = torch.sum(w**2 * (t[..., 1:] - t[..., :-1]), dim=-1) / 3
 
     return loss_inter + loss_intra
+    # return loss_intra
 
 
 def distortion_loss(weights_list, ray_samples_list):
