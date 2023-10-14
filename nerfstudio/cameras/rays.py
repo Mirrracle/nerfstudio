@@ -17,7 +17,7 @@ Some ray datastructures.
 """
 import random
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Literal, Optional, Tuple, Union, overload
+from typing import Callable, Dict, Literal, Optional, Tuple, Union, overload, List, Any
 
 import torch
 from jaxtyping import Float, Int, Shaped
@@ -46,6 +46,8 @@ class Frustums(TensorDataclass):
     """Projected area of pixel a distance 1 away from origin."""
     offsets: Optional[Float[Tensor, "*bs 3"]] = None
     """Offsets for each sample position"""
+    intersections: Optional[Float[Tensor, "*bs 3"]] = None
+    """Intersections of each ray and surfaces"""
 
     def get_positions(self) -> Float[Tensor, "*batch 3"]:
         """Calculates "center" position of frustum. Not weighted by mass.
@@ -130,7 +132,7 @@ class RaySamples(TensorDataclass):
     #     super().__post_init__()
     #     self.get_refracted_rays()
 
-    def get_refracted_rays(self) -> None:
+    def get_refracted_rays(self) -> Tuple[Any, Any]:
         # Modify the origins and directions of frustums here
         positions = self.frustums.get_positions()  # [4096, 48, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
 
@@ -139,6 +141,10 @@ class RaySamples(TensorDataclass):
         origins = self.frustums.origins  # [4096, 48, 3]
         directions = self.frustums.directions  # [4096, 48, 3]
         r1, r2 = 1.0 / 1.33, 1.33 / 1.0
+        # TODO:
+
+
+        # radius = 0.9
         radius = 0.9 * 0.1
 
         # 2. Get normals from the geometry, calculate new directions, and update positions after the first refraction
@@ -157,11 +163,12 @@ class RaySamples(TensorDataclass):
         directions_2 = ray_refraction_2.snell_fn(-normals_2)
         positions, mask_2 = ray_refraction_2.get_updated_sample_points(intersections_2, directions_2, 'out', mask_1)
 
+        self.frustums.intersections = [intersections_1, intersections_2]
+
         # 4. Update ray_samples.frustums.directions
         directions_new = directions.clone()
         directions_new[mask_1] = directions_1[mask_1]
         directions_new[mask_2] = directions_2[mask_2]
-        self.frustums.directions = directions_new
 
         # 5. Update ray_samples.frustums.origins
         origins_new = origins.clone()
@@ -171,7 +178,34 @@ class RaySamples(TensorDataclass):
                                                                            dim=-1)).unsqueeze(2)
         origins_new[mask_1] = origins_1[mask_1]
         origins_new[mask_2] = origins_2[mask_2]
+
+        return directions_new, origins_new
+
+    def update_origins_directions(self, directions_new, origins_new) -> None:
+        self.frustums.directions = directions_new
         self.frustums.origins = origins_new
+
+    def get_straight_rays(self) -> None:
+        # Modify the origins and directions of frustums here
+        positions = self.frustums.get_positions()  # [4096, 48, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
+
+        # Modify positions based on known geometry and Snell's law
+        # 1. Get origins, directions, r1, r2 directly
+        origins = self.frustums.origins  # [4096, 48, 3]
+        directions = self.frustums.directions  # [4096, 48, 3]
+        r1, r2 = 1.0 / 1.33, 1.33 / 1.0
+        # radius = 0.9
+        radius = 0.9 * 0.1
+
+        # 2. Get normals from the geometry, calculate new directions, and update positions after the first refraction
+        ray_1 = WaterBallRefraction(origins, directions, positions, r1, radius)
+        intersections_1, _ = ray_1.get_intersections_and_normals('in')  # [4096, 48, 3]
+
+        # 3. Get normals from the geometry, calculate new directions, and update positions after the second refraction
+        ray_2 = WaterBallRefraction(intersections_1, directions, positions, r2, radius)
+        intersections_2, _ = ray_2.get_intersections_and_normals('out')
+
+        self.frustums.intersections = [intersections_1, intersections_2]
 
     def get_weights(self, densities: Float[Tensor, "*batch num_samples 1"]) -> Float[Tensor, "*batch num_samples 1"]:
         """Return weights based on predicted densities
