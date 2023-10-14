@@ -32,7 +32,7 @@ from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
-from nerfstudio.field_components.ray_refraction import visualization
+from nerfstudio.field_components.ray_refraction import visualization, WaterBallRefraction
 from nerfstudio.fields.density_fields import HashMLPDensityField
 from nerfstudio.fields.nerfacto_field import NerfactoField
 from nerfstudio.model_components.losses import (
@@ -131,34 +131,133 @@ class NerfactoModelConfig(ModelConfig):
     """Dimension of the appearance embedding."""
 
 
-def plot_weights(weights, z, idx_start, idx_end):
+def ray_cube_intersection(origins, directions, cube_size):
     """
-    Plot the weights vs. z for a specific ray.
+    Find the intersection of rays with a cube.
 
     Args:
-    - weights (Tensor or array): The computed weights for samples along the ray.
-    - z_values (Tensor or array): The z-values (distances) along the ray.
-    - ray_idx (int): Index of the ray you want to visualize.
+    ray_origins (Tensor): The origins of the rays.
+    ray_directions (Tensor): The directions of the rays.
+    cube_size (float): The size of the cube.
+
+    Returns:
+    Tensor: Intersection in world coordinate origin.
+    """
+    # Define the half size of the cube
+    half_size = cube_size / 2.0
+
+    # Calculate the intersection of the ray with each plane of the cube
+    t_near = (half_size - origins) / directions
+    t_far = (-half_size - origins) / directions
+
+    # Find the intersection points
+    t = torch.min(torch.max(t_near, t_far), dim=2)[0]
+    intersection = origins + t.unsqueeze(2) * directions  # in world coordinate origin
+
+    return intersection
+
+
+def plot_weights_and_density(weights, density, z, idx_start, idx_end,
+                             intersections=None, inter_cube=None, scale_factor=1.0):
+    """
+    Plot the weights and density vs. z for a specific ray.
+
+    Args:
+        weights (Tensor or array): The computed weights for samples along the ray.
+        density (Tensor or array): The computed density for samples along the ray.
+        z (Tensor or array): distances along the ray.
+        idx_start (int): Start index of the rays you want to visualize.
+        idx_end (int): End index of the rays you want to visualize.
+        intersections (list): -
+        inter_cube (Tensor): -
+        scale_factor (float): scale factor
     """
 
     # Convert tensors to numpy arrays if necessary
     if hasattr(weights, "cpu"):
-        weights = weights.cpu().numpy()
+        weights = weights.cpu().numpy()  # [32768, 128, 1]
+    if hasattr(density, "cpu"):
+        density = density.cpu().numpy()  # [32768, 128, 1]
     if hasattr(z, "cpu"):
-        z = z.cpu().numpy()
+        z = z.cpu().numpy()  # [32768, 128, 1]
+
+    # clip maximum density
+    density = torch.clamp(torch.tensor(density), max=1e-10)
 
     for i in range(idx_start, idx_end):
-        valid_indices = np.where((z[i] >= 0) & (z[i] <= 1.0))[0]
-        plt.figure(figsize=(10, 5))
-        # plt.plot(z[i], weights[i], '-o')
-        plt.plot(z[i][valid_indices], weights[i][valid_indices], '-o')
-        plt.title(f"Weights vs. Z for Ray {i}")
-        plt.xlabel("Z values (Distance along the ray)")
-        plt.ylabel("Weights")
-        plt.xlim(0, 1)
-        plt.grid(True)
-        plt.savefig(f'data/figures1/weights_vs_z_ray_{i}.png', bbox_inches='tight')
-        # plt.show()
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), sharex='col')
+
+        # Plot intersections if they are not all 'nan'
+        if intersections is not None:
+            norm_dis1, norm_dis2 = intersections
+
+            valid_indices = np.where((z[i] >= 0.05 * scale_factor) & (z[i] <= 14 * scale_factor))[0]
+            # valid_indices = np.where((z[i] >= 2.0*scale_factor) & (z[i] <= 6.0*scale_factor))[0]
+            z_scaled = z[i][valid_indices] / scale_factor
+            if not torch.isnan(norm_dis1[i]):
+                color_1 = '#1585E1'
+                ax1.set_ylabel('Density', color=color_1)
+                ax1.plot(z_scaled, density[i][valid_indices], '-o', color=color_1, markersize=3)
+                ax1.tick_params(axis='y', labelcolor=color_1)
+
+                color_2 = '#8C30E3'
+                ax2.set_xlabel('Distance along the ray')
+                ax2.set_ylabel('Weights', color=color_2)
+                ax2.plot(z_scaled, weights[i][valid_indices], '-o', color=color_2, markersize=3)
+                ax2.tick_params(axis='y', labelcolor=color_2)
+
+                v1 = norm_dis1[i] / scale_factor
+                v2 = norm_dis2[i] / scale_factor
+                ax1.axvline(x=v1.cpu().numpy(), color='r', linestyle='--', label='Intersection 1')
+                ax2.axvline(x=v1.cpu().numpy(), color='r', linestyle='--', label='Intersection 1')
+                if not torch.isnan(norm_dis2[i]):
+                    ax1.axvline(x=v2.cpu().numpy(), color='r', linestyle='-.', label='Intersection 2')
+                    ax2.axvline(x=v2.cpu().numpy(), color='r', linestyle='-.', label='Intersection 2')
+                    print(f"Intersection 1: {v1}, Intersection 2: {v2}")
+                if inter_cube is not None:
+                    v3 = inter_cube[i] / scale_factor
+                    ax1.axvline(x=v3.cpu().numpy(), color='r', linestyle=':', label='Intersection 3')
+                    ax2.axvline(x=v3.cpu().numpy(), color='r', linestyle=':', label='Intersection 3')
+
+                ax1.legend(loc='upper right')
+                ax2.legend(loc='upper right')
+                ax1.grid(True)
+                ax2.grid(True)
+                ax1.set_title(f"Density and Weights along Ray {i}")
+
+                fig.tight_layout()
+                plt.savefig(f'data/figures/density_along_ray_{i}.png', bbox_inches='tight')
+                # plt.show()
+
+    import sys
+    sys.exit(0)
+
+
+def draw_heatmap(grid: torch.Tensor):
+    """
+    Draw a heatmap from a grid of values.
+
+    Args (Tensor): A tensor of shape [x, x, 1].
+    """
+    # TODO:
+
+    extent_1 = [-1, 1, -1, 1]
+    extent_2 = [-4.5, 4.5, -4.5, 4.5]
+    grid_2d = grid.squeeze(2).to(device="cpu")  # remove the third dimension
+    grid_2d += 1e-10  # avoid log(0)
+    grid_2d_log = torch.log(grid_2d)  # log transform
+    plt.figure(figsize=(10, 8))
+    plt.imshow(grid_2d_log, cmap='viridis', interpolation='nearest',
+               vmin=grid_2d_log.min(), vmax=grid_2d_log.max(), extent=extent_2)
+    plt.axvline(x=-0.9, color='w', linestyle='--')
+    plt.axvline(x=0.9, color='w', linestyle='--')
+    plt.axhline(y=-0.9, color='w', linestyle='--')
+    plt.axhline(y=0.9, color='w', linestyle='--')
+    plt.colorbar()  # add a colorbar to show the scale.
+    plt.savefig('data/heatmaps/heatmap_2023-10-04_213405.png')
+    plt.close()
+    import sys
+    sys.exit(0)
 
 
 class NerfactoModel(Model):
@@ -311,18 +410,43 @@ class NerfactoModel(Model):
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.predict_normals)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
-        # visualization(ray_samples, 56, 57)
 
-        weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
-        # plot_weights(weights, (ray_samples.spacing_starts + ray_samples.spacing_ends)/2, 0, 100)
-        # plot_weights(weights, (ray_samples.frustums.starts + ray_samples.frustums.ends)/2, 0, 100)
-        # import sys
-        # sys.exit(0)
+        # visualization(ray_samples, 489, 490)
+        density, _ = self.field.get_density_grid()
+        draw_heatmap(density)
+
+        weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])  # [32768, 128, 1]
+
+        # threshold = 0.02
+        # weights_for_depth = weights.clone()
+        # mask = weights_for_depth > threshold
+        # cumsum_mask = mask.cumsum(dim=1)
+        # new_mask = cumsum_mask > 1
+        # weights_for_depth[new_mask] = 0
+
+        # plot weights vs depth
+        # origins = ray_samples.frustums.origins  # [32768, 128, 3]
+        # intersections_1 = ray_samples.frustums.intersections[0]  # [32768, 128, 3]
+        # intersections_2 = ray_samples.frustums.intersections[1]  # [32768, 128, 3]
+        # norm_dis1 = torch.norm(intersections_1[:, 0, :] - origins[:, 0, :], dim=1)  # [32768]
+        # norm_dis2 = torch.norm(intersections_2[:, 0, :] - origins[:, -1, :], dim=1)  # [32768]
+        # intersections_3 = ray_cube_intersection(origins=ray_samples.frustums.origins,
+        #                                         directions=ray_samples.frustums.directions,
+        #                                         cube_size=8.4 * 0.1)
+        # norm_dis3 = torch.norm(intersections_3[:, -1, :] - origins[:, -1, :], dim=1)  # [32768]
+        # # norm_dis3 = None
+        # if not torch.isnan(norm_dis1[200:600]).all():
+        #     plot_weights_and_density(weights, field_outputs[FieldHeadNames.DENSITY],
+        #                              (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2,
+        #                              200, 600, [norm_dis1, norm_dis2], norm_dis3, 0.1)
+
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
-        depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+        # depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+        depth = self.renderer_depth(weights=weights
+                                    , ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
         outputs = {
