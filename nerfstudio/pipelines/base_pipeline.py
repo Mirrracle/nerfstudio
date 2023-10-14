@@ -405,8 +405,8 @@ class VanillaPipeline(Pipeline):
                 transient=True,
         ) as progress:
             task = progress.add_task("[green]Evaluating all eval images...", total=num_images)
-            # gt, pred = torch.Tensor(), torch.Tensor()  # initialize 2 tensors to hold depth maps#################
-            depth_trans = torch.load('data/depth_transformation_3.pt').to("cuda:0")
+            # gt, pred = torch.Tensor(), torch.Tensor()  # initialize 2 tensors to hold depth maps #################
+            # depth_trans = torch.load('data/depth_transformation_2.pt').to("cuda:0")
             for camera_ray_bundle, batch in self.datamanager.fixed_indices_eval_dataloader:
                 # time this the following line
                 inner_start = time()
@@ -426,6 +426,8 @@ class VanillaPipeline(Pipeline):
                 # new_max = 5.0
                 new_max = 13.15
                 new_min = 3.0
+                # TODO:
+
 
                 # convert gt depth map back to world coordinate
                 ground_truth_depth = batch["depth_image"]
@@ -433,43 +435,41 @@ class VanillaPipeline(Pipeline):
                 ground_truth_depth = (ground_truth_depth-0.0) * (new_min-new_max) / (1.0-0.0) + new_max
                 ground_truth_depth[~depth_mask] = new_max
 
-                # scale predicted depth map to the same scale first
                 predicted_depth = outputs["depth"].to(torch.float64)
 
                 # perform (a*d + b) to predicted depth map to make sure gt and pred are in the same scale
                 # gt = torch.cat((gt, ground_truth_depth[depth_mask].cpu()), dim=0)  # ##########################
                 # pred = torch.cat((pred, predicted_depth[depth_mask].cpu()), dim=0)  # ##########################
-                # print(gt.shape, pred.shape)
-                ones = torch.ones(len(predicted_depth[depth_mask]), 1).to('cuda:0')
-                p = predicted_depth[depth_mask].unsqueeze(0).T
-                predicted_depth[depth_mask] = (torch.cat((p, ones), dim=1) @ depth_trans.to(torch.float64)).squeeze(1)
-                predicted_depth[~depth_mask] = new_max
-                predicted_depth = torch.clamp(predicted_depth, new_min, new_max)  # truncate
-
+                # print(gt.shape, pred.shape)  # ##########################
+                # ones = torch.ones(len(predicted_depth[depth_mask]), 1).to('cuda:0')
+                # p = predicted_depth[depth_mask].unsqueeze(0).T
+                # predicted_depth[depth_mask] = (torch.cat((p, ones), dim=1) @ depth_trans.to(torch.float64)).squeeze(1)
+                # predicted_depth[~depth_mask] = new_max
+                # predicted_depth = torch.clamp(predicted_depth, new_min, new_max)  # truncate
 
                 metrics_dict["depth_mse"] = torch.nn.functional.mse_loss(
                     ground_truth_depth[depth_mask], predicted_depth[depth_mask])
 
-                depth_dir = os.path.join(output_dir, 'depth_maps/test')
-                if not os.path.exists(depth_dir):
-                    os.makedirs(depth_dir)
-                plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
-                           (1-ground_truth_depth).cpu().squeeze().numpy(), cmap='gray')
-                plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_pred.png'),
-                           (1-predicted_depth).cpu().squeeze().numpy(), cmap='gray')
-
-                # save rgb images
-                rgb_img = images_dict['img'].cpu().numpy()
-                rgb_dir = os.path.join(output_dir, 'rgb_images/test')
-                if not os.path.exists(rgb_dir):
-                    os.makedirs(rgb_dir)
-                plt.imsave(os.path.join(rgb_dir, 'r_' + str(idx) + '.png'), rgb_img)
+                # depth_dir = os.path.join(output_dir, 'depth_maps/train')
+                # if not os.path.exists(depth_dir):
+                #     os.makedirs(depth_dir)
+                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
+                #            (1-ground_truth_depth).cpu().squeeze().numpy(), cmap='gray')
+                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_pred.png'),
+                #            (1-predicted_depth).cpu().squeeze().numpy(), cmap='gray')
+                #
+                # # save rgb images
+                # rgb_img = images_dict['img'].cpu().numpy()
+                # rgb_dir = os.path.join(output_dir, 'rgb_images/train')
+                # if not os.path.exists(rgb_dir):
+                #     os.makedirs(rgb_dir)
+                # plt.imsave(os.path.join(rgb_dir, 'r_' + str(idx) + '.png'), rgb_img)
 
                 metrics_dict_list.append(metrics_dict)
                 progress.advance(task)
 
-            # torch.save(gt, 'data/gt.pt')
-            # torch.save(pred, 'data/pred.pt')
+            # torch.save(gt, 'data/gt_4.pt')
+            # torch.save(pred, 'data/pred_4.pt')
 
         # average the metrics list
         metrics_dict = {}
