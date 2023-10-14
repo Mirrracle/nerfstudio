@@ -25,7 +25,7 @@ from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.field_components.activations import trunc_exp
 from nerfstudio.field_components.embedding import Embedding
-from nerfstudio.field_components.encodings import HashEncoding, NeRFEncoding, SHEncoding
+from nerfstudio.field_components.encodings import HashEncoding, NeRFEncoding, SHEncoding, ZeroEncoding
 from nerfstudio.field_components.field_heads import (
     FieldHeadNames,
     PredNormalsFieldHead,
@@ -119,6 +119,7 @@ class NerfactoField(Field):
             levels=4,
             implementation=implementation,
         )
+        # self.direction_encoding = ZeroEncoding()  # turn off direction dependence
 
         self.position_encoding = NeRFEncoding(
             in_dim=3, num_frequencies=2, min_freq_exp=0, max_freq_exp=2 - 1, implementation=implementation
@@ -198,9 +199,41 @@ class NerfactoField(Field):
             implementation=implementation,
         )
 
+    def get_density_grid(self) -> Tuple[Tensor, Tensor]:
+        """Computes and returns the densities."""
+        # TODO:
+
+        linspace = torch.linspace(-4.5*0.1, 4.5*0.1, 1024, device="cuda:0")  # create a 1D tensor with 128 points
+        x, y = torch.meshgrid(linspace, linspace)  # create a 2D grid
+        z = torch.zeros_like(x)  # stack the 2D grid to create a 3D tensor of shape (128, 128, 3)
+        positions = torch.stack((x, y, z), dim=-1)
+        # visualization(ray_samples, 56, 57)
+        if self.spatial_distortion is not None:
+            positions = self.spatial_distortion(positions)
+            positions = (positions + 2.0) / 4.0
+        else:
+            positions = SceneBox.get_normalized_positions(positions, self.aabb)
+        # Make sure the tcnn gets inputs between 0 and 1.
+        selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
+        positions = positions * selector[..., None]
+        self._sample_locations = positions
+        if not self._sample_locations.requires_grad:
+            self._sample_locations.requires_grad = True
+        positions_flat = positions.view(-1, 3)
+        h = self.mlp_base(positions_flat).view(positions.shape[0], positions.shape[1], -1)
+        density_before_activation, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+        self._density_before_activation = density_before_activation
+
+        # Rectifying the density with an exponential is much more stable than a ReLU or
+        # softplus, because it enables high post-activation (float32) density outputs
+        # from smaller internal (float16) parameters.
+        density = trunc_exp(density_before_activation.to(positions))
+        density = density * selector[..., None]
+        return density, base_mlp_out
+
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Tensor]:
         """Computes and returns the densities."""
-        positions = ray_samples.frustums.get_positions()  # [4096, 48, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
+        positions = ray_samples.frustums.get_positions()  # [num_rays_per_batch, num_samples_per_ray, 3]
         # visualization(ray_samples, 56, 57)
         if self.spatial_distortion is not None:
             positions = self.spatial_distortion(positions)
