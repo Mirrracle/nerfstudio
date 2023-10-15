@@ -705,3 +705,17 @@ class SHEncoding(Encoding):
         if self.tcnn_encoding is not None:
             return self.tcnn_encoding(in_tensor)
         return self.pytorch_fwd(in_tensor)
+
+
+class ZeroEncoding(Encoding):
+    """Dummy encoding to remove input component.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(in_dim=3)
+
+    def get_out_dim(self) -> int:
+        return self.in_dim
+
+    def forward(self, in_tensor: Float[Tensor, "*bs input_dim"]) -> Float[Tensor, "*bs output_dim"]:
+        return torch.zeros_like(in_tensor)

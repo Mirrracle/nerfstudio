@@ -424,10 +424,9 @@ class VanillaPipeline(Pipeline):
 
                 # save depth map (replace transform_train/val.json to transform_test.json to get res on train/val set)
                 # new_max = 5.0
+                # TODO:
                 new_max = 13.15
                 new_min = 3.0
-                # TODO:
-
 
                 # convert gt depth map back to world coordinate
                 ground_truth_depth = batch["depth_image"]

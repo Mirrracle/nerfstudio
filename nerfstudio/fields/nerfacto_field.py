@@ -202,7 +202,6 @@ class NerfactoField(Field):
     def get_density_grid(self) -> Tuple[Tensor, Tensor]:
         """Computes and returns the densities."""
         # TODO:
-
         linspace = torch.linspace(-4.5*0.1, 4.5*0.1, 1024, device="cuda:0")  # create a 1D tensor with 128 points
         x, y = torch.meshgrid(linspace, linspace)  # create a 2D grid
         z = torch.zeros_like(x)  # stack the 2D grid to create a 3D tensor of shape (128, 128, 3)

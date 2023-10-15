@@ -590,7 +590,6 @@ class ProposalNetworkSampler(Sampler):
                 # Uniform sampling because we need to start with some samples
                 ray_samples = self.initial_sampler(ray_bundle, num_samples=num_samples)
                 # TODO:
-
                 # directions_new, origins_new = ray_samples.get_refracted_rays()
                 # ray_samples.update_origins_directions(directions_new, origins_new)
                 # ray_samples.get_straight_rays()

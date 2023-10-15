@@ -142,8 +142,6 @@ class RaySamples(TensorDataclass):
         directions = self.frustums.directions  # [4096, 48, 3]
         r1, r2 = 1.0 / 1.33, 1.33 / 1.0
         # TODO:
-
-
         # radius = 0.9
         radius = 0.9 * 0.1
 

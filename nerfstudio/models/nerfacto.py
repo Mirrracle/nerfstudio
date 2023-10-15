@@ -240,7 +240,6 @@ def draw_heatmap(grid: torch.Tensor):
     Args (Tensor): A tensor of shape [x, x, 1].
     """
     # TODO:
-
     extent_1 = [-1, 1, -1, 1]
     extent_2 = [-4.5, 4.5, -4.5, 4.5]
     grid_2d = grid.squeeze(2).to(device="cpu")  # remove the third dimension
